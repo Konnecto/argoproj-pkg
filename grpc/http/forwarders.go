@@ -137,15 +137,6 @@ type StreamForwarderFunc func(
 	opts ...func(context.Context, http.ResponseWriter, proto.Message) error,
 )
 
-func flush(flusher http.Flusher) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Warn("recovered in flush, issue with writer inside http.ResponseWriter")
-		}
-	}()
-	flusher.Flush()
-}
-
 func writeKeepalive(w http.ResponseWriter, mut *sync.Mutex) {
 	mut.Lock()
 	defer mut.Unlock()
@@ -157,7 +148,7 @@ func writeKeepalive(w http.ResponseWriter, mut *sync.Mutex) {
 	if err != nil {
 		log.Warnf("failed to write http keepalive response: %v", err)
 	} else if f, ok := w.(http.Flusher); ok {
-		flush(f)
+		f.Flush()
 	}
 }
 
