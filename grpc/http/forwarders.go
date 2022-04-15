@@ -6,13 +6,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
 
-	"github.com/felixge/httpsnoop"
 	"github.com/golang/protobuf/proto"
 	"github.com/grpc-ecosystem/grpc-gateway/runtime"
-	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 )
 
@@ -137,53 +133,6 @@ type StreamForwarderFunc func(
 	opts ...func(context.Context, http.ResponseWriter, proto.Message) error,
 )
 
-func writeKeepalive(w http.ResponseWriter, mut *sync.Mutex) {
-	mut.Lock()
-	defer mut.Unlock()
-
-	// Per https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation,
-	// lines that start with a `:` must be ignored by the client.
-	_, err := w.Write([]byte(":\n"))
-
-	if err != nil {
-		log.Warnf("failed to write http keepalive response: %v", err)
-	} else if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
-func keepalive(ctx context.Context, w http.ResponseWriter, mut *sync.Mutex) {
-	keepaliveInterval := time.Duration(time.Second * 15)
-	keepaliveTicker := time.NewTicker(keepaliveInterval)
-
-	defer keepaliveTicker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-keepaliveTicker.C:
-			writeKeepalive(w, mut)
-		}
-	}
-}
-
-func withKeepalive(ctx context.Context, w http.ResponseWriter) http.ResponseWriter {
-	mut := sync.Mutex{}
-
-	go keepalive(ctx, w, &mut)
-
-	return httpsnoop.Wrap(w, httpsnoop.Hooks{
-		Write: func(next httpsnoop.WriteFunc) httpsnoop.WriteFunc {
-			return func(p []byte) (int, error) {
-				mut.Lock()
-				defer mut.Unlock()
-				return next(p)
-			}
-		},
-	})
-}
-
 func NewStreamForwarder(messageKey func(proto.Message) (string, error)) StreamForwarderFunc {
 	return func(
 		ctx context.Context,
@@ -199,7 +148,6 @@ func NewStreamForwarder(messageKey func(proto.Message) (string, error)) StreamFo
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Transfer-Encoding", "chunked")
 			w.Header().Set("X-Content-Type-Options", "nosniff")
-			w = withKeepalive(ctx, w)
 		}
 		dataByKey := make(map[string][]byte)
 		m := newMarshaler(req, isSSE)
